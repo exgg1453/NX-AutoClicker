@@ -46,6 +46,7 @@ class OverlayService : Service() {
     private var pressMs = 40L
     private var clickLimit = 0
     private var clickCount = 0
+    private var targetSizeDp = TARGET_DP
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -56,6 +57,7 @@ class OverlayService : Service() {
         intervalMs = prefs.getLong(KEY_INTERVAL, 100L)
         pressMs = prefs.getLong(KEY_PRESS, 40L)
         clickLimit = prefs.getInt(KEY_LIMIT, 0)
+        targetSizeDp = prefs.getInt(KEY_TARGET_SIZE, TARGET_DP)
         startForegroundInternal()
         createTarget()
         createColumn()
@@ -122,7 +124,7 @@ class OverlayService : Service() {
     private fun createTarget() {
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val metrics = resources.displayMetrics
-        val size = dp(TARGET_DP)
+        val size = dp(targetSizeDp)
         val view = TargetView(this) { x, y -> moveTarget(x, y) }
         view.centerX = prefs.getInt(KEY_TARGET_X, metrics.widthPixels / 2)
         view.centerY = prefs.getInt(KEY_TARGET_Y, metrics.heightPixels / 2)
@@ -139,6 +141,18 @@ class OverlayService : Service() {
         targetView = view
         targetParams = params
         runCatching { windowManager.addView(view, params) }
+    }
+
+    private fun applyTargetSize() {
+        val view = targetView ?: return
+        val params = targetParams ?: return
+        val size = dp(targetSizeDp)
+        params.width = size
+        params.height = size
+        params.x = view.centerX - size / 2
+        params.y = view.centerY - size / 2
+        runCatching { windowManager.updateViewLayout(view, params) }
+        view.invalidate()
     }
 
     private fun moveTarget(x: Int, y: Int) {
@@ -351,6 +365,7 @@ class OverlayService : Service() {
             .putLong(KEY_INTERVAL, intervalMs)
             .putLong(KEY_PRESS, pressMs)
             .putInt(KEY_LIMIT, clickLimit)
+            .putInt(KEY_TARGET_SIZE, targetSizeDp)
             .apply()
     }
 
@@ -471,6 +486,27 @@ class OverlayService : Service() {
         })
         root.addView(limitBar)
 
+        val sizeLabel = makeText("Hedef boyutu: $targetSizeDp dp", 13f, Color.argb(220, 255, 255, 255))
+        root.addView(sizeLabel)
+
+        val sizeBar = SeekBar(this)
+        sizeBar.max = 140
+        sizeBar.progress = (targetSizeDp - 28).coerceIn(0, 140)
+        sizeBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                targetSizeDp = progress + 28
+                sizeLabel.text = "Hedef boyutu: $targetSizeDp dp"
+                applyTargetSize()
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                savePrefs()
+            }
+        })
+        root.addView(sizeBar)
+
         root.addView(
             makeText(
                 "Hedef halkasını basılmasını istediğin yere sürükle. Çalışırken halka dokunmaları geçirmez.",
@@ -485,6 +521,8 @@ class OverlayService : Service() {
             intervalMs = 100L
             pressMs = 40L
             clickLimit = 0
+            targetSizeDp = TARGET_DP
+            applyTargetSize()
             savePrefs()
             closeSettings()
             openSettings()
@@ -530,5 +568,6 @@ class OverlayService : Service() {
         private const val KEY_INTERVAL = "interval"
         private const val KEY_PRESS = "press"
         private const val KEY_LIMIT = "limit"
+        private const val KEY_TARGET_SIZE = "target_size"
     }
 }
