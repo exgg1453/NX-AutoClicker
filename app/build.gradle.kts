@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val nxKeystore: String? = System.getenv("NX_KEYSTORE")
+
 android {
     namespace = "com.nxteam.nxautoclicker"
     compileSdk = 34
@@ -15,12 +17,31 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("nx") {
+            if (nxKeystore != null) {
+                storeFile = file(nxKeystore)
+                storePassword = System.getenv("NX_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("NX_KEY_ALIAS")
+                keyPassword = System.getenv("NX_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
+            if (nxKeystore != null) {
+                signingConfig = signingConfigs.getByName("nx")
+            }
         }
         release {
             isMinifyEnabled = false
+            signingConfig = if (nxKeystore != null) {
+                signingConfigs.getByName("nx")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

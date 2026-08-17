@@ -5,6 +5,11 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  NX_KEYSTORE_PASSWORD: nxteam2026
+  NX_KEY_ALIAS: nxkey
+  NX_KEY_PASSWORD: nxteam2026
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,36 +31,8 @@ jobs:
 
       - name: Generate keystore
         run: |
-          keytool -genkeypair -v \
-            -keystore $GITHUB_WORKSPACE/nx.keystore \
-            -alias nxkey \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass nxteam2026 \
-            -keypass nxteam2026 \
-            -dname "CN=NX Team, OU=NX, O=NX Team, L=Istanbul, S=Istanbul, C=TR"
-
-      - name: Inject signing config
-        run: |
-          python3 - <<'PY'
-          path = 'app/build.gradle.kts'
-          src = open(path).read()
-          signing = '''
-    signingConfigs {
-        create("nx") {
-            storeFile = file(System.getenv("GITHUB_WORKSPACE") + "/nx.keystore")
-            storePassword = "nxteam2026"
-            keyAlias = "nxkey"
-            keyPassword = "nxteam2026"
-        }
-    }
-'''
-          src = src.replace('    buildTypes {', signing + '\n    buildTypes {', 1)
-          src = src.replace('        debug {', '        debug {\n            signingConfig = signingConfigs.getByName("nx")', 1)
-          src = src.replace('        release {', '        release {\n            signingConfig = signingConfigs.getByName("nx")', 1)
-          open(path, 'w').write(src)
-          PY
+          keytool -genkeypair -v -keystore "$GITHUB_WORKSPACE/nx.keystore" -alias nxkey -keyalg RSA -keysize 2048 -validity 10000 -storepass nxteam2026 -keypass nxteam2026 -dname "CN=NX Team, OU=NX, O=NX Team, L=Istanbul, S=Istanbul, C=TR"
+          echo "NX_KEYSTORE=$GITHUB_WORKSPACE/nx.keystore" >> $GITHUB_ENV
 
       - name: Build
         run: |
