@@ -24,6 +24,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 
 class OverlayService : Service() {
 
@@ -32,13 +33,19 @@ class OverlayService : Service() {
 
     private var targetView: TargetView? = null
     private var targetParams: WindowManager.LayoutParams? = null
-    private var bubbleView: BubbleView? = null
-    private var bubbleParams: WindowManager.LayoutParams? = null
+    private var columnView: LinearLayout? = null
+    private var columnParams: WindowManager.LayoutParams? = null
+    private var playButton: CircleButtonView? = null
     private var settingsView: View? = null
+
+    private var dragOriginX = 0
+    private var dragOriginY = 0
 
     private var running = false
     private var intervalMs = 100L
     private var pressMs = 40L
+    private var clickLimit = 0
+    private var clickCount = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -48,9 +55,10 @@ class OverlayService : Service() {
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         intervalMs = prefs.getLong(KEY_INTERVAL, 100L)
         pressMs = prefs.getLong(KEY_PRESS, 40L)
+        clickLimit = prefs.getInt(KEY_LIMIT, 0)
         startForegroundInternal()
         createTarget()
-        createBubble()
+        createColumn()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -87,11 +95,7 @@ class OverlayService : Service() {
             this,
             1,
             Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            } else {
-                PendingIntent.FLAG_UPDATE_CURRENT
-            }
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
@@ -101,7 +105,7 @@ class OverlayService : Service() {
         }
         val notification = builder
             .setContentTitle("NX Auto Clicker")
-            .setContentText("Panel acik")
+            .setContentText("Panel açık")
             .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
             .addAction(
@@ -152,65 +156,93 @@ class OverlayService : Service() {
             .apply()
     }
 
-    private fun createBubble() {
+    private fun makeCircleButton(icon: IconType, onTap: () -> Unit): CircleButtonView {
+        val view = CircleButtonView(
+            this,
+            icon,
+            onTap = onTap,
+            onDragStart = { snapshotColumnPosition() },
+            onDrag = { dx, dy -> dragColumn(dx, dy) }
+        )
+        val size = dp(BUTTON_DP)
+        val params = LinearLayout.LayoutParams(size, size)
+        params.setMargins(0, dp(5), 0, dp(5))
+        view.layoutParams = params
+        return view
+    }
+
+    private fun createColumn() {
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val metrics = resources.displayMetrics
-        val size = dp(BUBBLE_DP)
-        val view = BubbleView(
-            this,
-            onMoved = { x, y -> moveBubble(x, y) },
-            onToggle = { toggleRun() },
-            onLongPress = { openSettings() }
-        )
-        view.posX = prefs.getInt(KEY_BUBBLE_X, dp(16))
-        view.posY = prefs.getInt(KEY_BUBBLE_Y, metrics.heightPixels / 3)
+
+        val column = LinearLayout(this)
+        column.orientation = LinearLayout.VERTICAL
+        column.gravity = Gravity.CENTER_HORIZONTAL
+
+        val play = makeCircleButton(IconType.PLAY) { toggleRun() }
+        playButton = play
+        column.addView(play)
+        column.addView(makeCircleButton(IconType.GEAR) { toggleSettings() })
+        column.addView(makeCircleButton(IconType.CLOSE) { stopSelf() })
+
         val params = WindowManager.LayoutParams(
-            size,
-            size,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
             overlayType(),
             baseFlags(),
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.TOP or Gravity.START
-        params.x = view.posX
-        params.y = view.posY
-        bubbleView = view
-        bubbleParams = params
-        runCatching { windowManager.addView(view, params) }
+        params.x = prefs.getInt(KEY_COLUMN_X, dp(12))
+        params.y = prefs.getInt(KEY_COLUMN_Y, metrics.heightPixels / 4)
+
+        columnView = column
+        columnParams = params
+        runCatching { windowManager.addView(column, params) }
     }
 
-    private fun moveBubble(x: Int, y: Int) {
-        val view = bubbleView ?: return
-        val params = bubbleParams ?: return
-        view.posX = x
-        view.posY = y
-        params.x = x
-        params.y = y
+    private fun snapshotColumnPosition() {
+        val params = columnParams ?: return
+        dragOriginX = params.x
+        dragOriginY = params.y
+    }
+
+    private fun dragColumn(dx: Float, dy: Float) {
+        val view = columnView ?: return
+        val params = columnParams ?: return
+        params.x = dragOriginX + dx.toInt()
+        params.y = dragOriginY + dy.toInt()
         runCatching { windowManager.updateViewLayout(view, params) }
         getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putInt(KEY_BUBBLE_X, x)
-            .putInt(KEY_BUBBLE_Y, y)
+            .putInt(KEY_COLUMN_X, params.x)
+            .putInt(KEY_COLUMN_Y, params.y)
             .apply()
     }
 
     private fun toggleRun() {
         if (running) {
-            running = false
-            handler.removeCallbacksAndMessages(null)
+            stopClicking()
         } else {
             if (ClickerAccessibilityService.instance == null) {
-                android.widget.Toast
-                    .makeText(this, "Once erisilebilirlik servisini ac", android.widget.Toast.LENGTH_LONG)
-                    .show()
+                Toast.makeText(this, "Önce erişilebilirlik servisini açın", Toast.LENGTH_LONG).show()
                 return
             }
             closeSettings()
+            clickCount = 0
             running = true
+            playButton?.icon = IconType.STOP
+            targetView?.running = true
+            applyTargetTouchable()
             handler.post { dispatchTap() }
         }
-        targetView?.running = running
-        bubbleView?.running = running
+    }
+
+    private fun stopClicking() {
+        running = false
+        handler.removeCallbacksAndMessages(null)
+        playButton?.icon = IconType.PLAY
+        targetView?.running = false
         applyTargetTouchable()
     }
 
@@ -229,10 +261,7 @@ class OverlayService : Service() {
         if (!running) return
         val service = ClickerAccessibilityService.instance
         if (service == null) {
-            running = false
-            targetView?.running = false
-            bubbleView?.running = false
-            applyTargetTouchable()
+            stopClicking()
             return
         }
         val view = targetView ?: return
@@ -247,11 +276,11 @@ class OverlayService : Service() {
 
         val callback = object : AccessibilityService.GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                scheduleNext(intervalMs)
+                afterTap()
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                scheduleNext(intervalMs)
+                afterTap()
             }
         }
 
@@ -262,6 +291,17 @@ class OverlayService : Service() {
         if (!dispatched) {
             scheduleNext(200L)
         }
+    }
+
+    private fun afterTap() {
+        if (!running) return
+        clickCount++
+        if (clickLimit > 0 && clickCount >= clickLimit) {
+            stopClicking()
+            Toast.makeText(this, "$clickLimit tıklama tamamlandı", Toast.LENGTH_SHORT).show()
+            return
+        }
+        scheduleNext(intervalMs)
     }
 
     private fun scheduleNext(delay: Long) {
@@ -285,10 +325,37 @@ class OverlayService : Service() {
         button.textSize = 13f
         button.background = roundedBackground(Color.argb(235, 32, 38, 48), 10)
         button.setOnClickListener { action() }
-        val params = LinearLayout.LayoutParams(0, dp(42), 1f)
-        params.setMargins(dp(3), dp(6), dp(3), dp(2))
+        val params = LinearLayout.LayoutParams(0, dp(44), 1f)
+        params.setMargins(dp(3), dp(8), dp(3), dp(2))
         button.layoutParams = params
         return button
+    }
+
+    private fun makeText(text: String, size: Float, color: Int): TextView {
+        val view = TextView(this)
+        view.text = text
+        view.textSize = size
+        view.setTextColor(color)
+        val params = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        params.setMargins(0, dp(8), 0, 0)
+        view.layoutParams = params
+        return view
+    }
+
+    private fun savePrefs() {
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(KEY_INTERVAL, intervalMs)
+            .putLong(KEY_PRESS, pressMs)
+            .putInt(KEY_LIMIT, clickLimit)
+            .apply()
+    }
+
+    private fun toggleSettings() {
+        if (settingsView != null) closeSettings() else openSettings()
     }
 
     private fun closeSettings() {
@@ -297,26 +364,44 @@ class OverlayService : Service() {
         settingsView = null
     }
 
+    private fun cpsText(): String {
+        val perSecond = 1000.0 / (intervalMs + pressMs).coerceAtLeast(1L)
+        return String.format("%.1f", perSecond)
+    }
+
     private fun openSettings() {
-        if (settingsView != null) {
-            closeSettings()
-            return
-        }
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
-        root.background = roundedBackground(Color.argb(242, 15, 17, 21), 16)
-        root.setPadding(dp(16), dp(14), dp(16), dp(12))
+        root.background = roundedBackground(Color.argb(244, 15, 17, 21), 16)
+        root.setPadding(dp(18), dp(14), dp(18), dp(14))
+
+        val header = LinearLayout(this)
+        header.orientation = LinearLayout.HORIZONTAL
+        header.gravity = Gravity.CENTER_VERTICAL
 
         val title = TextView(this)
         title.text = "Ayarlar"
         title.setTextColor(Color.WHITE)
-        title.textSize = 16f
-        root.addView(title)
+        title.textSize = 17f
+        val titleParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        title.layoutParams = titleParams
+        header.addView(title)
 
-        val intervalLabel = TextView(this)
-        intervalLabel.setTextColor(Color.argb(210, 255, 255, 255))
-        intervalLabel.textSize = 13f
-        intervalLabel.text = "Aralik: $intervalMs ms"
+        val closeIcon = CircleButtonView(
+            this,
+            IconType.CLOSE,
+            onTap = { closeSettings() },
+            onDragStart = { },
+            onDrag = { _, _ -> }
+        )
+        closeIcon.layoutParams = LinearLayout.LayoutParams(dp(34), dp(34))
+        header.addView(closeIcon)
+        root.addView(header)
+
+        val speedLabel = makeText("Hız: saniyede ${cpsText()} tıklama", 13f, Color.rgb(77, 208, 225))
+        root.addView(speedLabel)
+
+        val intervalLabel = makeText("Tıklama aralığı: $intervalMs ms", 13f, Color.argb(220, 255, 255, 255))
         root.addView(intervalLabel)
 
         val intervalBar = SeekBar(this)
@@ -325,24 +410,19 @@ class OverlayService : Service() {
         intervalBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 intervalMs = progress.coerceAtLeast(10).toLong()
-                intervalLabel.text = "Aralik: $intervalMs ms"
+                intervalLabel.text = "Tıklama aralığı: $intervalMs ms"
+                speedLabel.text = "Hız: saniyede ${cpsText()} tıklama"
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
 
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .edit()
-                    .putLong(KEY_INTERVAL, intervalMs)
-                    .apply()
+                savePrefs()
             }
         })
         root.addView(intervalBar)
 
-        val pressLabel = TextView(this)
-        pressLabel.setTextColor(Color.argb(210, 255, 255, 255))
-        pressLabel.textSize = 13f
-        pressLabel.text = "Basma suresi: $pressMs ms"
+        val pressLabel = makeText("Basılı tutma süresi: $pressMs ms", 13f, Color.argb(220, 255, 255, 255))
         root.addView(pressLabel)
 
         val pressBar = SeekBar(this)
@@ -351,28 +431,69 @@ class OverlayService : Service() {
         pressBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 pressMs = progress.coerceAtLeast(1).toLong()
-                pressLabel.text = "Basma suresi: $pressMs ms"
+                pressLabel.text = "Basılı tutma süresi: $pressMs ms"
+                speedLabel.text = "Hız: saniyede ${cpsText()} tıklama"
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
 
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .edit()
-                    .putLong(KEY_PRESS, pressMs)
-                    .apply()
+                savePrefs()
             }
         })
         root.addView(pressBar)
 
+        val limitLabel = makeText(
+            if (clickLimit > 0) "Tıklama sayısı: $clickLimit" else "Tıklama sayısı: sınırsız",
+            13f,
+            Color.argb(220, 255, 255, 255)
+        )
+        root.addView(limitLabel)
+
+        val limitBar = SeekBar(this)
+        limitBar.max = 1000
+        limitBar.progress = clickLimit.coerceIn(0, 1000)
+        limitBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                clickLimit = progress
+                limitLabel.text = if (clickLimit > 0) {
+                    "Tıklama sayısı: $clickLimit"
+                } else {
+                    "Tıklama sayısı: sınırsız"
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                savePrefs()
+            }
+        })
+        root.addView(limitBar)
+
+        root.addView(
+            makeText(
+                "Hedef halkasını basılmasını istediğin yere sürükle. Çalışırken halka dokunmaları geçirmez.",
+                11f,
+                Color.rgb(154, 164, 178)
+            )
+        )
+
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
-        row.addView(makeButton("Kapat") { closeSettings() })
-        row.addView(makeButton("Paneli Kapat") { stopSelf() })
+        row.addView(makeButton("Sıfırla") {
+            intervalMs = 100L
+            pressMs = 40L
+            clickLimit = 0
+            savePrefs()
+            closeSettings()
+            openSettings()
+        })
+        row.addView(makeButton("Tamam") { closeSettings() })
         root.addView(row)
 
         val params = WindowManager.LayoutParams(
-            dp(290),
+            dp(300),
             WindowManager.LayoutParams.WRAP_CONTENT,
             overlayType(),
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
@@ -389,9 +510,9 @@ class OverlayService : Service() {
         handler.removeCallbacksAndMessages(null)
         closeSettings()
         targetView?.let { runCatching { windowManager.removeView(it) } }
-        bubbleView?.let { runCatching { windowManager.removeView(it) } }
+        columnView?.let { runCatching { windowManager.removeView(it) } }
         targetView = null
-        bubbleView = null
+        columnView = null
         super.onDestroy()
     }
 
@@ -400,13 +521,14 @@ class OverlayService : Service() {
         private const val CHANNEL_ID = "nx_autoclicker"
         private const val NOTIFICATION_ID = 4411
         private const val TARGET_DP = 72
-        private const val BUBBLE_DP = 48
+        private const val BUTTON_DP = 48
         private const val PREFS = "nx_autoclicker"
         private const val KEY_TARGET_X = "target_x"
         private const val KEY_TARGET_Y = "target_y"
-        private const val KEY_BUBBLE_X = "bubble_x"
-        private const val KEY_BUBBLE_Y = "bubble_y"
+        private const val KEY_COLUMN_X = "column_x"
+        private const val KEY_COLUMN_Y = "column_y"
         private const val KEY_INTERVAL = "interval"
         private const val KEY_PRESS = "press"
+        private const val KEY_LIMIT = "limit"
     }
 }

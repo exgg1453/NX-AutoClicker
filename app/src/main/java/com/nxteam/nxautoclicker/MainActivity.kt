@@ -79,19 +79,19 @@ class MainActivity : AppCompatActivity() {
         root.gravity = Gravity.TOP
 
         root.addView(makeLabel("NX Auto Clicker", 24f, Color.rgb(77, 208, 225)))
-        root.addView(makeLabel("Yuvarlak hedefi nereye basmasini istiyorsan oraya surukle, baloncuktaki oynat tusuna bas.", 13f, Color.rgb(154, 164, 178)))
+        root.addView(makeLabel("Yuvarlak hedefi nereye basılmasını istiyorsan oraya sürükle, ardından oynat tuşuna bas.", 13f, Color.rgb(154, 164, 178)))
 
-        root.addView(makeLabel("1. Erisilebilirlik servisi", 15f, Color.WHITE))
+        root.addView(makeLabel("1. Erişilebilirlik servisi", 15f, Color.WHITE))
         accessibilityStatus = makeLabel("", 13f, Color.WHITE)
         root.addView(accessibilityStatus)
-        root.addView(makeButton("Erisilebilirlik Ayarlarini Ac") {
+        root.addView(makeButton("Erişilebilirlik Ayarlarını Aç") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         })
 
-        root.addView(makeLabel("2. Diger uygulamalar uzerinde goster", 15f, Color.WHITE))
+        root.addView(makeLabel("2. Diğer uygulamalar üzerinde göster", 15f, Color.WHITE))
         overlayStatus = makeLabel("", 13f, Color.WHITE)
         root.addView(overlayStatus)
-        root.addView(makeButton("Ustte Gosterme Iznini Ac") {
+        root.addView(makeButton("Üstte Gösterme İznini Aç") {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
                 startActivity(
                     Intent(
@@ -102,15 +102,15 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        root.addView(makeLabel("3. Paneli baslat", 15f, Color.WHITE))
-        root.addView(makeButton("Paneli Baslat") { startPanel() })
+        root.addView(makeLabel("3. Paneli başlat", 15f, Color.WHITE))
+        root.addView(makeButton("Paneli Başlat") { startPanel() })
         root.addView(makeButton("Paneli Kapat") {
             startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_STOP))
         })
 
         root.addView(
             makeLabel(
-                "Kullanim: Baloncugu surukleyerek tasi, kisa dokunus baslatir ve durdurur, uzun dokunus ayarlari acar. Calisirken hedef halkasi dokunmalari gecirmez, oyun onu gormez.",
+                "Kullanım: Ekranda üç yuvarlak tuş çıkar. Üstteki başlatır ve durdurur, ortadaki ayarları açar, alttaki paneli kapatır. Tuşlardan birini basılı tutup sürükleyerek üçünü birlikte taşırsın.",
                 12f,
                 Color.rgb(154, 164, 178)
             )
@@ -118,7 +118,7 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(
             makeLabel(
-                "Not: Baloncugu hedef halkasindan uzaga koy, ustuste gelirse dokunma baloncuga gider.",
+                "Not: Tuş kolonunu hedef halkasından uzağa koy. Üst üste gelirse dokunma tuşa gider, oyuna gitmez.",
                 12f,
                 Color.rgb(255, 167, 38)
             )
@@ -144,11 +144,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshStatus() {
         val overlayOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
-        overlayStatus.text = if (overlayOk) "Hazir" else "Kapali"
+        overlayStatus.text = if (overlayOk) "Hazır" else "Kapalı"
         overlayStatus.setTextColor(if (overlayOk) Color.rgb(123, 228, 149) else Color.rgb(255, 138, 128))
 
         val accessibilityOk = isAccessibilityEnabled()
-        accessibilityStatus.text = if (accessibilityOk) "Hazir" else "Kapali"
+        accessibilityStatus.text = if (accessibilityOk) "Hazır" else "Kapalı"
         accessibilityStatus.setTextColor(if (accessibilityOk) Color.rgb(123, 228, 149) else Color.rgb(255, 138, 128))
     }
 

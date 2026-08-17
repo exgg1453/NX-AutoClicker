@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">NX Auto Clicker</string>
-    <string name="accessibility_description">Secilen noktaya otomatik dokunma gonderir.</string>
+    <string name="accessibility_description">Seçilen noktaya otomatik dokunma gönderir. Ekranda yüzen hedef halkasını istediğin yere sürükleyip başlat tuşuna basman yeterlidir.</string>
 </resources>
