@@ -25,18 +25,22 @@ import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
 
 class OverlayService : Service() {
+
+    private class TargetItem(val view: TargetView, val params: WindowManager.LayoutParams)
 
     private lateinit var windowManager: WindowManager
     private val handler = Handler(Looper.getMainLooper())
 
-    private var targetView: TargetView? = null
-    private var targetParams: WindowManager.LayoutParams? = null
+    private val targets = mutableListOf<TargetItem>()
     private var columnView: LinearLayout? = null
     private var columnParams: WindowManager.LayoutParams? = null
     private var playButton: CircleButtonView? = null
     private var settingsView: View? = null
+    private var targetMenuView: View? = null
 
     private var dragOriginX = 0
     private var dragOriginY = 0
@@ -46,7 +50,8 @@ class OverlayService : Service() {
     private var pressMs = 40L
     private var clickLimit = 0
     private var clickCount = 0
-    private var targetSizeDp = TARGET_DP
+    private var targetSizeDp = DEFAULT_TARGET_DP
+    private var sequenceIndex = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -57,9 +62,9 @@ class OverlayService : Service() {
         intervalMs = prefs.getLong(KEY_INTERVAL, 100L)
         pressMs = prefs.getLong(KEY_PRESS, 40L)
         clickLimit = prefs.getInt(KEY_LIMIT, 0)
-        targetSizeDp = prefs.getInt(KEY_TARGET_SIZE, TARGET_DP)
+        targetSizeDp = prefs.getInt(KEY_TARGET_SIZE, DEFAULT_TARGET_DP)
         startForegroundInternal()
-        createTarget()
+        restoreTargets()
         createColumn()
     }
 
@@ -121,13 +126,54 @@ class OverlayService : Service() {
         startForeground(NOTIFICATION_ID, notification)
     }
 
-    private fun createTarget() {
-        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val metrics = resources.displayMetrics
+    private fun restoreTargets() {
+        val raw = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_TARGETS, null)
+        val positions = mutableListOf<Pair<Int, Int>>()
+        if (!raw.isNullOrBlank()) {
+            runCatching {
+                val array = JSONArray(raw)
+                for (i in 0 until array.length()) {
+                    val item = array.getJSONObject(i)
+                    positions.add(Pair(item.getInt("x"), item.getInt("y")))
+                }
+            }
+        }
+        if (positions.isEmpty()) {
+            val metrics = resources.displayMetrics
+            positions.add(Pair(metrics.widthPixels / 2, metrics.heightPixels / 2))
+        }
+        positions.forEach { addTarget(it.first, it.second, persist = false) }
+        saveTargets()
+    }
+
+    private fun saveTargets() {
+        val array = JSONArray()
+        targets.forEach { item ->
+            val obj = JSONObject()
+            obj.put("x", item.view.centerX)
+            obj.put("y", item.view.centerY)
+            array.put(obj)
+        }
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_TARGETS, array.toString())
+            .apply()
+    }
+
+    private fun addTarget(x: Int, y: Int, persist: Boolean = true) {
+        if (targets.size >= MAX_TARGETS) {
+            Toast.makeText(this, "En fazla $MAX_TARGETS nokta eklenebilir", Toast.LENGTH_SHORT).show()
+            return
+        }
         val size = dp(targetSizeDp)
-        val view = TargetView(this) { x, y -> moveTarget(x, y) }
-        view.centerX = prefs.getInt(KEY_TARGET_X, metrics.widthPixels / 2)
-        view.centerY = prefs.getInt(KEY_TARGET_Y, metrics.heightPixels / 2)
+        lateinit var item: TargetItem
+        val view = TargetView(
+            this,
+            onMoved = { newX, newY -> moveTarget(item, newX, newY) },
+            onTapped = { openTargetMenu(item) }
+        )
+        view.centerX = x
+        view.centerY = y
         val params = WindowManager.LayoutParams(
             size,
             size,
@@ -136,38 +182,71 @@ class OverlayService : Service() {
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.TOP or Gravity.START
-        params.x = view.centerX - size / 2
-        params.y = view.centerY - size / 2
-        targetView = view
-        targetParams = params
+        params.x = x - size / 2
+        params.y = y - size / 2
+        item = TargetItem(view, params)
+        targets.add(item)
         runCatching { windowManager.addView(view, params) }
+        relabelTargets()
+        if (persist) saveTargets()
+    }
+
+    private fun addTargetNearCenter() {
+        if (running) stopClicking()
+        val metrics = resources.displayMetrics
+        val offset = dp(28) * targets.size
+        val x = (metrics.widthPixels / 2 + offset).coerceIn(dp(40), metrics.widthPixels - dp(40))
+        val y = (metrics.heightPixels / 2 + offset).coerceIn(dp(40), metrics.heightPixels - dp(40))
+        addTarget(x, y)
+    }
+
+    private fun relabelTargets() {
+        targets.forEachIndexed { index, item -> item.view.label = index + 1 }
+    }
+
+    private fun moveTarget(item: TargetItem, x: Int, y: Int) {
+        item.view.centerX = x
+        item.view.centerY = y
+        item.params.x = x - item.view.width / 2
+        item.params.y = y - item.view.height / 2
+        runCatching { windowManager.updateViewLayout(item.view, item.params) }
+        saveTargets()
+    }
+
+    private fun removeTarget(item: TargetItem) {
+        if (targets.size <= 1) {
+            Toast.makeText(this, "En az bir nokta kalmalı", Toast.LENGTH_SHORT).show()
+            return
+        }
+        runCatching { windowManager.removeView(item.view) }
+        targets.remove(item)
+        relabelTargets()
+        saveTargets()
     }
 
     private fun applyTargetSize() {
-        val view = targetView ?: return
-        val params = targetParams ?: return
         val size = dp(targetSizeDp)
-        params.width = size
-        params.height = size
-        params.x = view.centerX - size / 2
-        params.y = view.centerY - size / 2
-        runCatching { windowManager.updateViewLayout(view, params) }
-        view.invalidate()
+        targets.forEach { item ->
+            item.params.width = size
+            item.params.height = size
+            item.params.x = item.view.centerX - size / 2
+            item.params.y = item.view.centerY - size / 2
+            runCatching { windowManager.updateViewLayout(item.view, item.params) }
+            item.view.invalidate()
+        }
     }
 
-    private fun moveTarget(x: Int, y: Int) {
-        val view = targetView ?: return
-        val params = targetParams ?: return
-        view.centerX = x
-        view.centerY = y
-        params.x = x - view.width / 2
-        params.y = y - view.height / 2
-        runCatching { windowManager.updateViewLayout(view, params) }
-        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putInt(KEY_TARGET_X, x)
-            .putInt(KEY_TARGET_Y, y)
-            .apply()
+    private fun applyTargetTouchable() {
+        targets.forEach { item ->
+            item.params.flags = if (running) {
+                baseFlags() or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            } else {
+                baseFlags()
+            }
+            item.view.running = running
+            if (!running) item.view.active = false
+            runCatching { windowManager.updateViewLayout(item.view, item.params) }
+        }
     }
 
     private fun makeCircleButton(icon: IconType, onTap: () -> Unit): CircleButtonView {
@@ -196,6 +275,7 @@ class OverlayService : Service() {
         val play = makeCircleButton(IconType.PLAY) { toggleRun() }
         playButton = play
         column.addView(play)
+        column.addView(makeCircleButton(IconType.ADD) { addTargetNearCenter() })
         column.addView(makeCircleButton(IconType.GEAR) { toggleSettings() })
         column.addView(makeCircleButton(IconType.CLOSE) { stopSelf() })
 
@@ -208,7 +288,7 @@ class OverlayService : Service() {
         )
         params.gravity = Gravity.TOP or Gravity.START
         params.x = prefs.getInt(KEY_COLUMN_X, dp(12))
-        params.y = prefs.getInt(KEY_COLUMN_Y, metrics.heightPixels / 4)
+        params.y = prefs.getInt(KEY_COLUMN_Y, metrics.heightPixels / 5)
 
         columnView = column
         columnParams = params
@@ -242,11 +322,13 @@ class OverlayService : Service() {
                 Toast.makeText(this, "Önce erişilebilirlik servisini açın", Toast.LENGTH_LONG).show()
                 return
             }
+            if (targets.isEmpty()) return
             closeSettings()
+            closeTargetMenu()
             clickCount = 0
+            sequenceIndex = 0
             running = true
             playButton?.icon = IconType.STOP
-            targetView?.running = true
             applyTargetTouchable()
             handler.post { dispatchTap() }
         }
@@ -256,19 +338,7 @@ class OverlayService : Service() {
         running = false
         handler.removeCallbacksAndMessages(null)
         playButton?.icon = IconType.PLAY
-        targetView?.running = false
         applyTargetTouchable()
-    }
-
-    private fun applyTargetTouchable() {
-        val view = targetView ?: return
-        val params = targetParams ?: return
-        params.flags = if (running) {
-            baseFlags() or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        } else {
-            baseFlags()
-        }
-        runCatching { windowManager.updateViewLayout(view, params) }
     }
 
     private fun dispatchTap() {
@@ -278,9 +348,18 @@ class OverlayService : Service() {
             stopClicking()
             return
         }
-        val view = targetView ?: return
-        val x = view.centerX.toFloat()
-        val y = view.centerY.toFloat()
+        if (targets.isEmpty()) {
+            stopClicking()
+            return
+        }
+        if (sequenceIndex >= targets.size) sequenceIndex = 0
+        val item = targets[sequenceIndex]
+
+        targets.forEach { it.view.active = false }
+        item.view.active = true
+
+        val x = item.view.centerX.toFloat()
+        val y = item.view.centerY.toFloat()
 
         val path = Path()
         path.moveTo(x, y)
@@ -310,6 +389,7 @@ class OverlayService : Service() {
     private fun afterTap() {
         if (!running) return
         clickCount++
+        sequenceIndex = if (targets.isEmpty()) 0 else (sequenceIndex + 1) % targets.size
         if (clickLimit > 0 && clickCount >= clickLimit) {
             stopClicking()
             Toast.makeText(this, "$clickLimit tıklama tamamlandı", Toast.LENGTH_SHORT).show()
@@ -369,6 +449,52 @@ class OverlayService : Service() {
             .apply()
     }
 
+    private fun closeTargetMenu() {
+        val view = targetMenuView ?: return
+        runCatching { windowManager.removeView(view) }
+        targetMenuView = null
+    }
+
+    private fun openTargetMenu(item: TargetItem) {
+        if (running) return
+        closeTargetMenu()
+
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.background = roundedBackground(Color.argb(244, 15, 17, 21), 14)
+        root.setPadding(dp(16), dp(12), dp(16), dp(12))
+
+        root.addView(makeText("Nokta ${item.view.label}", 16f, Color.WHITE))
+        root.addView(
+            makeText(
+                "Sıra: ${item.view.label}. tıklama. Noktayı sürükleyerek taşıyabilirsin.",
+                12f,
+                Color.rgb(154, 164, 178)
+            )
+        )
+
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.addView(makeButton("Sil") {
+            removeTarget(item)
+            closeTargetMenu()
+        })
+        row.addView(makeButton("Kapat") { closeTargetMenu() })
+        root.addView(row)
+
+        val params = WindowManager.LayoutParams(
+            dp(260),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        )
+        params.gravity = Gravity.CENTER
+        targetMenuView = root
+        runCatching { windowManager.addView(root, params) }
+    }
+
     private fun toggleSettings() {
         if (settingsView != null) closeSettings() else openSettings()
     }
@@ -385,6 +511,8 @@ class OverlayService : Service() {
     }
 
     private fun openSettings() {
+        closeTargetMenu()
+
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
         root.background = roundedBackground(Color.argb(244, 15, 17, 21), 16)
@@ -398,8 +526,7 @@ class OverlayService : Service() {
         title.text = "Ayarlar"
         title.setTextColor(Color.WHITE)
         title.textSize = 17f
-        val titleParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        title.layoutParams = titleParams
+        title.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         header.addView(title)
 
         val closeIcon = CircleButtonView(
@@ -412,6 +539,14 @@ class OverlayService : Service() {
         closeIcon.layoutParams = LinearLayout.LayoutParams(dp(34), dp(34))
         header.addView(closeIcon)
         root.addView(header)
+
+        root.addView(
+            makeText(
+                "Nokta sayısı: ${targets.size}. Tıklamalar 1'den başlayıp sırayla ilerler, son noktadan sonra başa döner.",
+                12f,
+                Color.rgb(123, 228, 149)
+            )
+        )
 
         val speedLabel = makeText("Hız: saniyede ${cpsText()} tıklama", 13f, Color.rgb(77, 208, 225))
         root.addView(speedLabel)
@@ -509,7 +644,7 @@ class OverlayService : Service() {
 
         root.addView(
             makeText(
-                "Hedef halkasını basılmasını istediğin yere sürükle. Çalışırken halka dokunmaları geçirmez.",
+                "Yeni nokta için artı tuşuna bas. Bir noktaya kısa dokunursan silme menüsü açılır.",
                 11f,
                 Color.rgb(154, 164, 178)
             )
@@ -521,7 +656,7 @@ class OverlayService : Service() {
             intervalMs = 100L
             pressMs = 40L
             clickLimit = 0
-            targetSizeDp = TARGET_DP
+            targetSizeDp = DEFAULT_TARGET_DP
             applyTargetSize()
             savePrefs()
             closeSettings()
@@ -547,9 +682,10 @@ class OverlayService : Service() {
         running = false
         handler.removeCallbacksAndMessages(null)
         closeSettings()
-        targetView?.let { runCatching { windowManager.removeView(it) } }
+        closeTargetMenu()
+        targets.forEach { runCatching { windowManager.removeView(it.view) } }
+        targets.clear()
         columnView?.let { runCatching { windowManager.removeView(it) } }
-        targetView = null
         columnView = null
         super.onDestroy()
     }
@@ -558,11 +694,11 @@ class OverlayService : Service() {
         const val ACTION_STOP = "com.nxteam.nxautoclicker.STOP"
         private const val CHANNEL_ID = "nx_autoclicker"
         private const val NOTIFICATION_ID = 4411
-        private const val TARGET_DP = 72
+        private const val DEFAULT_TARGET_DP = 72
         private const val BUTTON_DP = 48
+        private const val MAX_TARGETS = 20
         private const val PREFS = "nx_autoclicker"
-        private const val KEY_TARGET_X = "target_x"
-        private const val KEY_TARGET_Y = "target_y"
+        private const val KEY_TARGETS = "targets"
         private const val KEY_COLUMN_X = "column_x"
         private const val KEY_COLUMN_Y = "column_y"
         private const val KEY_INTERVAL = "interval"

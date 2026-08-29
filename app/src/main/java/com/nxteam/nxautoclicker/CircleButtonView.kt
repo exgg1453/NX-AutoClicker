@@ -13,7 +13,8 @@ enum class IconType {
     PLAY,
     STOP,
     GEAR,
-    CLOSE
+    CLOSE,
+    ADD
 }
 
 class CircleButtonView(
@@ -54,6 +55,7 @@ class CircleButtonView(
         IconType.PLAY -> Color.rgb(77, 208, 225)
         IconType.GEAR -> Color.rgb(178, 190, 204)
         IconType.CLOSE -> Color.rgb(255, 167, 38)
+        IconType.ADD -> Color.rgb(123, 228, 149)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -84,6 +86,10 @@ class CircleButtonView(
             IconType.CLOSE -> {
                 canvas.drawLine(cx - size, cy - size, cx + size, cy + size, iconStrokePaint)
                 canvas.drawLine(cx + size, cy - size, cx - size, cy + size, iconStrokePaint)
+            }
+            IconType.ADD -> {
+                canvas.drawLine(cx - size, cy, cx + size, cy, iconStrokePaint)
+                canvas.drawLine(cx, cy - size, cx, cy + size, iconStrokePaint)
             }
             IconType.GEAR -> {
                 canvas.drawCircle(cx, cy, size * 0.62f, iconStrokePaint)
